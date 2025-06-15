@@ -1,0 +1,103 @@
+#!/bin/bash
+
+set -euo pipefail
+
+log() {
+    echo "$(date +'%Y-%m-%d %H:%M:%S') $*"
+}
+
+if [[ "$#" -lt 2 ]]; then
+    log "Usage: $0 <openrc> <tag>"
+    exit 1
+fi
+
+OPENRC="$1"
+TAG="$2"
+
+source "$OPENRC"
+
+log "Cleaning up $TAG using $OPENRC"
+
+KEY_NAME="${TAG}_key"
+NET_NAME="${TAG}_network"
+SUBNET_NAME="${TAG}_subnet"
+ROUTER_NAME="${TAG}_router"
+SG_BASTION="sg_bastion_${TAG}"
+SG_PROXY="sg_proxy_${TAG}"
+SG_NODES="sg_nodes_${TAG}"
+
+SERVER_IDS=$(openstack server list --name "^${TAG}_" -f value -c ID)
+if [[ -n "$SERVER_IDS" ]]; then
+    log "Deleting servers: $SERVER_IDS"
+    openstack server delete --wait $SERVER_IDS || true
+    log "Waiting for servers to be deleted..."
+    while openstack server list --name "^${TAG}_" -f value -c ID | grep -q .; do
+        sleep 5
+    done
+    log "Servers deleted."
+else
+    log "No servers found for $TAG"
+fi
+
+FIPS=$(openstack floating ip list --tag "$TAG" -f value -c "Floating IP Address")
+if [[ -n "$FIPS" ]]; then
+    log "Deleting floating IPs: $FIPS"
+    for FIP in $FIPS; do
+        openstack floating ip delete "$FIP" || true
+    done
+    log "Floating IPs deleted."
+fi
+
+log "Looking for volumes tagged \"$TAG\"…"
+openstack volume list --name "${TAG}_node*"
+openstack volume list --long -f value -c ID -c Name -c Status -c Tags \
+| awk -v tag="$TAG" '$0 ~ tag { print $1 }' \
+| xargs -r -n1 sh -c 'for vol; do
+      openstack volume delete "$vol" >/dev/null
+  done' _ 
+
+log "Volume cleanup complete."
+
+ROUTER_ID=$(openstack router show "$ROUTER_NAME" -f value -c id 2>/dev/null || echo "")
+SUBNET_ID=$(openstack subnet show "$SUBNET_NAME" -f value -c id 2>/dev/null || echo "")
+if [[ -n "$ROUTER_ID" && -n "$SUBNET_ID" ]]; then
+    log "Detaching subnet from router..."
+    openstack router remove subnet "$ROUTER_NAME" "$SUBNET_NAME" || true
+fi
+
+if openstack router show "$ROUTER_NAME" &>/dev/null; then
+    log "Deleting router $ROUTER_NAME"
+    openstack router delete "$ROUTER_NAME" || true
+fi
+
+if openstack subnet show "$SUBNET_NAME" &>/dev/null; then
+    log "Deleting subnet $SUBNET_NAME"
+    openstack subnet delete "$SUBNET_NAME" || true
+fi
+
+if openstack network show "$NET_NAME" &>/dev/null; then
+    log "Deleting network $NET_NAME"
+    openstack network delete "$NET_NAME" || true
+fi
+
+for SG in "$SG_BASTION" "$SG_PROXY" "$SG_NODES"; do
+    if openstack security group show "$SG" &>/dev/null; then
+        log "Deleting security group $SG"
+        openstack security group delete "$SG" || true
+    fi
+done
+
+if openstack keypair show "$KEY_NAME" &>/dev/null; then
+    log "Deleting keypair $KEY_NAME"
+    openstack keypair delete "$KEY_NAME" || true
+fi
+
+log "Removing local dynamic files…"
+for f in hosts.ini; do
+  if [ -f "$f" ]; then
+    rm -f "$f"
+    log "  Deleted $f"
+  fi
+done
+
+log "Cleanup done. All resources for $TAG have been removed."
