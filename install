@@ -1,10 +1,22 @@
 #!/bin/bash
 set -euo pipefail
 START_TIME=$(date +%s)
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
+
+# Color definitions
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+log() { echo -e "${GREEN}$(date '+%Y-%m-%d %H:%M:%S')${NC} $*"; }
 
 if [[ $# -ne 3 ]]; then
-  echo "Usage: $0 <openrc_file> <tag> <ssh_key_name>"
+  echo -e "${RED}Usage: $0 <openrc_file> <tag> <ssh_key_name>${NC}"
   exit 1
 fi
 
@@ -15,32 +27,32 @@ KEY_PRIV="$HOME/.ssh/$KEY"
 KEY_PUB="$HOME/.ssh/$KEY.pub"
 
 if [ ! -f "$OPENRC" ]; then
-  log "ERROR: OpenRC file $OPENRC not found."
+  log "${RED}ERROR: OpenRC file $OPENRC not found.${NC}"
   exit 1
 fi
 if [ ! -f "$KEY_PUB" ]; then
-  log "ERROR: Public key $KEY_PUB not found."
+  log "${RED}ERROR: Public key $KEY_PUB not found.${NC}"
   exit 1
 fi
 
 if [ ! -f "$KEY_PRIV" ]; then
-    log "ERROR: Private key $KEY_PRIV not found."
+    log "${RED}ERROR: Private key $KEY_PRIV not found.${NC}"
     exit 1
 fi
 if [ "$(stat -c "%a" "$KEY_PRIV")" -ne "600" ]; then
-    log "ERROR: Private key $KEY_PRIV has incorrect permissions. It must be 600 (rw-------)."
-    log "Please run: chmod 600 $KEY_PRIV"
+    log "${RED}ERROR: Private key $KEY_PRIV has incorrect permissions. It must be 600 (rw-------).${NC}"
+    log "${YELLOW}Please run: chmod 600 $KEY_PRIV${NC}"
     exit 1
 fi
 
 source "$OPENRC"
 
-log "Starting deployment of $TAG using $OPENRC for credentials."
+log "${BOLD}Starting deployment of ${CYAN}$TAG${NC} ${BOLD}using ${CYAN}$OPENRC${NC} ${BOLD}for credentials.${NC}"
 
-log "Checking for available floating IPs."
+log "${BLUE}Checking for available floating IPs.${NC}"
 EXT_NET=$(openstack network list --external -f value -c Name | head -n1)
 if [ -z "$EXT_NET" ]; then
- log "ERROR: No external network found in OpenStack project. Cannot allocate floating IPs."
+ log "${RED}ERROR: No external network found in OpenStack project. Cannot allocate floating IPs.${NC}"
  exit 1
 fi
 
@@ -49,15 +61,15 @@ BASTION_FIP=""
 PROXY_FIP=""
 declare -a SELECTED_FIPS=()
 
-log "Searching for FIPs tagged with '$TAG'..."
+log "${BLUE}Searching for FIPs tagged with '${CYAN}$TAG${BLUE}'...${NC}"
 mapfile -t TAGGED_FIPS < <(openstack floating ip list --status DOWN --network "$EXT_NET" -f value -c "Floating IP Address" --tag "$TAG")
-log "Found ${#TAGGED_FIPS[@]} FIPs already tagged with '$TAG' and are DOWN."
+log "Found ${YELLOW}${#TAGGED_FIPS[@]}${NC} FIPs already tagged with '${CYAN}$TAG${NC}' and are DOWN."
 
 for fip_addr in "${TAGGED_FIPS[@]}"; do
   SELECTED_FIPS+=("$fip_addr")
 done
 
-log "Searching for any other untagged or differently-tagged FIPs..."
+log "${BLUE}Searching for any other untagged or differently-tagged FIPs...${NC}"
 mapfile -t ALL_DOWN_FIPS < <(openstack floating ip list --status DOWN --network "$EXT_NET" -f value -c "Floating IP Address")
 
 for potential_fip in "${ALL_DOWN_FIPS[@]}"; do
@@ -74,36 +86,36 @@ for potential_fip in "${ALL_DOWN_FIPS[@]}"; do
 done
 
 NUM_AVAILABLE_FIPS=${#SELECTED_FIPS[@]}
-log "Total ${NUM_AVAILABLE_FIPS} unique floating IPs currently available in the project."
+log "Total ${YELLOW}${NUM_AVAILABLE_FIPS}${NC} unique floating IPs currently available in the project."
 
 if [ "$NUM_AVAILABLE_FIPS" -lt "$REQUIRED_FIPS" ]; then
  ALLOCATED_COUNT=$((REQUIRED_FIPS - NUM_AVAILABLE_FIPS))
- log "Need $ALLOCATED_COUNT more FIP. Allocating new ones and tagging with '$TAG'..."
+ log "${BLUE}Need ${YELLOW}$ALLOCATED_COUNT${BLUE} more FIP. Allocating new ones and tagging with '${CYAN}$TAG${BLUE}'...${NC}"
  declare -a NEWLY_ALLOCATED_FIPS=()
  for i in $(seq 1 "$ALLOCATED_COUNT"); do
   NEW_FIP=$(openstack floating ip create "$EXT_NET" --tag "$TAG" -f value -c "floating_ip_address")
-  log "Allocated: $NEW_FIP (tagged with $TAG)"
+  log "Allocated: ${GREEN}$NEW_FIP${NC} (tagged with ${CYAN}$TAG${NC})"
   NEWLY_ALLOCATED_FIPS+=("$NEW_FIP")
  done
  SELECTED_FIPS=("${NEWLY_ALLOCATED_FIPS[@]}" "${SELECTED_FIPS[@]}")
 fi
 
 if [ "${#SELECTED_FIPS[@]}" -lt "$REQUIRED_FIPS" ]; then
- log "ERROR: After all attempts, could not secure $REQUIRED_FIPS floating IPs. Only found the allocated ${#SELECTED_FIPS[@]}."
+ log "${RED}ERROR: After all attempts, could not secure $REQUIRED_FIPS floating IPs. Only found the allocated ${#SELECTED_FIPS[@]}.${NC}"
  exit 1
 fi
 
 BASTION_FIP="${SELECTED_FIPS[0]}"
 PROXY_FIP="${SELECTED_FIPS[1]}"
-log "Selected Bastion Floating IP: $BASTION_FIP"
-log "Selected Proxy Floating IP: $PROXY_FIP"
-log "Done"
+log "Selected Bastion Floating IP: ${GREEN}$BASTION_FIP${NC}"
+log "Selected Proxy Floating IP: ${GREEN}$PROXY_FIP${NC}"
+log "${GREEN}Done${NC}"
 
-log "Checking if we have ${TAG}_key available."
+log "${BLUE}Checking if we have ${CYAN}${TAG}_key${BLUE} available.${NC}"
 if openstack keypair show "${TAG}_key" &>/dev/null; then
-  log "${TAG}_key already exists."
+  log "${CYAN}${TAG}_key${NC} already exists."
 else
-  log "Adding ${TAG}_key associated with $KEY."
+  log "Adding ${CYAN}${TAG}_key${NC} associated with ${YELLOW}$KEY${NC}."
   openstack keypair create --public-key "$KEY_PUB" "${TAG}_key" >/dev/null
 fi
 
@@ -113,44 +125,44 @@ ROUTER="${TAG}_router"
 CIDR="192.168.77.0/24"
 
 if ! openstack network show "$NET" &>/dev/null; then
-  log "Did not detect $NET in the OpenStack project, adding it."
+  log "Did not detect ${CYAN}$NET${NC} in the OpenStack project, adding it."
   openstack network create --tag "$TAG" "$NET" >/dev/null
-  log "Added $NET."
+  log "Added ${GREEN}$NET${NC}."
 else
-  log "$NET already exists."
+  log "${CYAN}$NET${NC} already exists."
 fi
 
 if ! openstack subnet show "$SUBNET" &>/dev/null; then
   openstack subnet create --network "$NET" --subnet-range "$CIDR" --tag "$TAG" "$SUBNET" >/dev/null
-  log "Added $SUBNET."
+  log "Added ${GREEN}$SUBNET${NC}."
 else
-  log "$SUBNET already exists."
+  log "${CYAN}$SUBNET${NC} already exists."
 fi
 
 if ! openstack router show "$ROUTER" &>/dev/null; then
   openstack router create --tag "$TAG" "$ROUTER" >/dev/null
-  log "Added $ROUTER."
+  log "Added ${GREEN}$ROUTER${NC}."
 else
-  log "$ROUTER already exists."
+  log "${CYAN}$ROUTER${NC} already exists."
 fi
 
-log "Adding networks to router."
+log "${BLUE}Adding networks to router.${NC}"
 openstack router set --external-gateway "$EXT_NET" "$ROUTER" >/dev/null || true
 openstack router add subnet "$ROUTER" "$SUBNET" >/dev/null 2>/dev/null || true
-log "Done."
+log "${GREEN}Done.${NC}"
 
 SG_BASTION="sg_bastion_${TAG}"
 SG_PROXY="sg_proxy_${TAG}"
 SG_NODES="sg_nodes_${TAG}"
 
 
-log "Adding security groups."
+log "${BLUE}Adding security groups.${NC}"
 
 if ! openstack security group show "$SG_BASTION" &>/dev/null; then
   openstack security group create --description "Bastion SG" --tag "$TAG" "$SG_BASTION" >/dev/null
   openstack security group rule create "$SG_BASTION" --protocol tcp --dst-port 22 --ingress --remote-ip 0.0.0.0/0 >/dev/null
   openstack security group rule create "$SG_BASTION" --protocol tcp --dst-port 5000 --ingress --remote-ip 0.0.0.0/0 >/dev/null
-  log "Created $SG_BASTION"
+  log "Created ${GREEN}$SG_BASTION${NC}"
 fi
 
 if ! openstack security group show "$SG_PROXY" &>/dev/null; then
@@ -158,7 +170,7 @@ if ! openstack security group show "$SG_PROXY" &>/dev/null; then
   openstack security group rule create "$SG_PROXY" --protocol tcp --dst-port 5000 --ingress --remote-ip 0.0.0.0/0 >/dev/null
   openstack security group rule create "$SG_PROXY" --protocol udp --dst-port 6000 --ingress --remote-ip 0.0.0.0/0 >/dev/null
   openstack security group rule create "$SG_PROXY" --protocol tcp --dst-port 22 --ingress --remote-ip 0.0.0.0/0 >/dev/null
-  log "Created $SG_PROXY"
+  log "Created ${GREEN}$SG_PROXY${NC}"
 fi
 
 if ! openstack security group show "$SG_NODES" &>/dev/null; then
@@ -167,20 +179,20 @@ if ! openstack security group show "$SG_NODES" &>/dev/null; then
   openstack security group rule create "$SG_NODES" --protocol tcp --dst-port 5000 --ingress --remote-ip $CIDR >/dev/null
   openstack security group rule create "$SG_NODES" --protocol udp --dst-port 6000 --ingress --remote-ip $CIDR >/dev/null
   openstack security group rule create "$SG_NODES" --protocol icmp --ingress --remote-ip $CIDR >/dev/null
-  log "Created $SG_NODES"
+  log "Created ${GREEN}$SG_NODES${NC}"
 fi
 
-log "Done."
+log "${GREEN}Done.${NC}"
 
-log "Detecting suitable image, looking for Ubuntu 20.04;"
+log "${BLUE}Detecting suitable image, looking for Ubuntu 20.04;${NC}"
 IMG_ID=$(openstack image list --status active -f value -c ID -c Name \
      | grep -i 'ubuntu' | grep -i '20.04' | sort -k2 | tail -n1 | awk '{print $1}')
 IMG_NAME=$(openstack image show "$IMG_ID" -f value -c name)
-log "Selected: $IMG_NAME"
+log "Selected: ${CYAN}$IMG_NAME${NC}"
 
 FLAVOR="b.1c2gb"
 if ! openstack flavor show "$FLAVOR" &>/dev/null; then
-  log "ERROR: Flavor $FLAVOR not found."
+  log "${RED}ERROR: Flavor $FLAVOR not found.${NC}"
   exit 1
 fi
 
@@ -201,7 +213,7 @@ N_NODES=$(head -n1 servers.conf 2>/dev/null || echo 3)
 for i in $(seq 1 $N_NODES); do
   NAME="${TAG}_node$i"
   VOL_ID=$(create_boot_volume "$NAME")
-  log "Booting $NAME from volume $VOL_ID"
+  log "Booting ${CYAN}$NAME${NC} from volume ${YELLOW}$VOL_ID${NC}"
   openstack server create \
     --flavor "$FLAVOR" \
     --key-name "${TAG}_key" \
@@ -215,7 +227,7 @@ done
 
 NAME="${TAG}_bastion"
 VOL_ID=$(create_boot_volume "$NAME")
-log "Booting $NAME from volume $VOL_ID"
+log "Booting ${CYAN}$NAME${NC} from volume ${YELLOW}$VOL_ID${NC}"
 openstack server create \
   --flavor "$FLAVOR" \
   --key-name "${TAG}_key" \
@@ -228,7 +240,7 @@ openstack server create \
 
 NAME="${TAG}_proxy"
 VOL_ID=$(create_boot_volume "$NAME")
-log "Booting $NAME from volume $VOL_ID"
+log "Booting ${CYAN}$NAME${NC} from volume ${YELLOW}$VOL_ID${NC}"
 openstack server create \
   --flavor "$FLAVOR" \
   --key-name "${TAG}_key" \
@@ -242,40 +254,40 @@ openstack server create \
 openstack server add floating ip "${TAG}_bastion" "$BASTION_FIP" >/dev/null
 openstack server add floating ip "${TAG}_proxy" "$PROXY_FIP" >/dev/null
 
-log "All servers launched."
+log "${GREEN}All servers launched.${NC}"
 
 ### Ansible
-log "Generating Ansible inventory hosts.ini"
+log "${PURPLE}Generating Ansible inventory hosts.ini${NC}"
 INVENTORY_FILE="hosts.ini"
 
 echo "[nodes]" > "$INVENTORY_FILE"
 for i in $(seq 1 $N_NODES); do
   NODE_NAME="${TAG}_node$i"
-  log "Getting IP for $NODE_NAME"
+  log "Getting IP for ${CYAN}$NODE_NAME${NC}"
   tries=0
   while true; do
     STATUS=$(openstack server show "$NODE_NAME" -f value -c status 2>/dev/null)
     if [[ "$STATUS" != "ACTIVE" ]]; then
-      log "  $NODE_NAME not ACTIVE yet (status=$STATUS), waiting..."
+      log "  ${CYAN}$NODE_NAME${NC} not ACTIVE yet (status=${YELLOW}$STATUS${NC}), waiting..."
       sleep 3
       tries=$((tries + 1))
       if [ "$tries" -ge 60 ]; then
-        log "ERROR: $NODE_NAME not ACTIVE after waiting."
+        log "${RED}ERROR: $NODE_NAME not ACTIVE after waiting.${NC}"
         exit 1
       fi
       continue
     fi
     ADDR=$(openstack server show "$NODE_NAME" -f value -c addresses 2>/dev/null)
-    log "Address string: $ADDR"
+    log "Address string: ${YELLOW}$ADDR${NC}"
 
     NODE_IP=$(echo "$ADDR" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | head -1)
-    log "Extracted IP: $NODE_IP"
+    log "Extracted IP: ${GREEN}$NODE_IP${NC}"
     if [[ -n "$NODE_IP" ]]; then
       break
     fi
     tries=$((tries + 1))
     if [ "$tries" -ge 60 ]; then
-      log "ERROR: Cant get a valid IP for $NODE_NAME after waiting."
+      log "${RED}ERROR: Cant get a valid IP for $NODE_NAME after waiting.${NC}"
       exit 1
     fi
     sleep 3
@@ -296,38 +308,38 @@ echo "nodes" >> "$INVENTORY_FILE"
 echo "proxy" >> "$INVENTORY_FILE"
 echo "bastion" >> "$INVENTORY_FILE"
 
-log "Bation Public IP: $BASTION_IP"
-log "Proxy Public IP: $PROXY_IP"
+log "${BOLD}Bastion Public IP: ${GREEN}$BASTION_IP${NC}"
+log "${BOLD}Proxy Public IP: ${GREEN}$PROXY_IP${NC}"
 
-log "Copying all required files to bastion for Ansible setup."
+log "${PURPLE}Copying all required files to bastion for Ansible setup.${NC}"
 
-ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i "$KEY_PRIV" ubuntu@"$BASTION_FIP" "mkdir -p ~/.ssh && chmod 700 ~/.ssh" || { log "ERROR: Failed to create ~/.ssh on bastion."; exit 1; }
+ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i "$KEY_PRIV" ubuntu@"$BASTION_FIP" "mkdir -p ~/.ssh && chmod 700 ~/.ssh" || { log "${RED}ERROR: Failed to create ~/.ssh on bastion.${NC}"; exit 1; }
 
-log "Copying private key to bastion."
+log "${PURPLE}Copying private key to bastion.${NC}"
 scp -o StrictHostKeyChecking=no -o BatchMode=yes -i "$KEY_PRIV" "$KEY_PRIV" ubuntu@"$BASTION_FIP":~/.ssh/$KEY
-log "Copying Ansible files to bastion."
+log "${PURPLE}Copying Ansible files to bastion.${NC}"
 scp -o StrictHostKeyChecking=no -o BatchMode=yes -i "$KEY_PRIV" hosts.ini src/site.yaml src/haproxy.cfg.j2 src/nginx.conf.j2 src/service.py src/alive.py src/nodes.txt.j2 ubuntu@"$BASTION_FIP":~
-log "Copying Ansible templates to bastion's templates directory."
+log "${PURPLE}Copying Ansible templates to bastion's templates directory.${NC}"
 ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i "$KEY_PRIV" ubuntu@"$BASTION_FIP" "mkdir -p ~/templates"
 scp -o StrictHostKeyChecking=no -o BatchMode=yes -i "$KEY_PRIV" src/haproxy.cfg.j2 src/nginx.conf.j2 src/alive.py src/nodes.txt.j2 ubuntu@"$BASTION_FIP":~/templates/
 
-log "Setting permissions and ssh config on bastion."
+log "${PURPLE}Setting permissions and ssh config on bastion.${NC}"
 ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i "$KEY_PRIV" ubuntu@"$BASTION_FIP" "
 chmod 600 ~/.ssh/$KEY
 echo -e 'Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile=/dev/null' >> ~/.ssh/config
 chmod 600 ~/.ssh/config
-" || { log "ERROR: Failed to configure bastion SSH settings."; exit 1; }
+" || { log "${RED}ERROR: Failed to configure bastion SSH settings.${NC}"; exit 1; }
 
-log "Installing Ansible and Python3 on bastion."
+log "${PURPLE}Installing Ansible and Python3 on bastion.${NC}"
 ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i "$KEY_PRIV" ubuntu@"$BASTION_FIP" "
 sudo apt update -qq && sudo apt install -y ansible python3
 if [ \$? -ne 0 ]; then
     echo 'Error installing Ansible/Python on bastion.' >&2
     exit 1
 fi
-" || { log "ERROR: Failed to install dependencies on bastion."; exit 1; }
+" || { log "${RED}ERROR: Failed to install dependencies on bastion.${NC}"; exit 1; }
 
-log "Running Ansible playbook for deployment (output will be shown below)."
+log "${PURPLE}Running Ansible playbook for deployment (output will be shown below).${NC}"
 ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i "$KEY_PRIV" ubuntu@"$BASTION_FIP" "
 export ANSIBLE_HOST_KEY_CHECKING=False
 ansible-playbook -i hosts.ini site.yaml
@@ -335,15 +347,15 @@ if [ \$? -ne 0 ]; then
     echo 'Ansible playbook failed. Check the output above for details.' >&2
     exit 1
 fi
-" || { log "ERROR: Ansible playbook execution failed on bastion. See output above for details."; exit 1; }
+" || { log "${RED}ERROR: Ansible playbook execution failed on bastion. See output above for details.${NC}"; exit 1; }
 
-log "All configuration and deployment has been completed."
-log "To ssh to Bastion server: ssh -i ~/.ssh/$KEY ubuntu@\"$BASTION_FIP\""
-log "Test Flask application: curl http://\"$PROXY_FIP\":5000/"
-log "Test snmp: snmpwalk -v2c -c public \"$PROXY_FIP\":6000 1.3.6.1.2.1.1.1.0"
+log "${BOLD}${GREEN}All configuration and deployment has been completed.${NC}"
+log "${BOLD}To ssh to Bastion server: ${WHITE}ssh -i ~/.ssh/$KEY ubuntu@\"$BASTION_FIP\"${NC}"
+log "${BOLD}Test Flask application: ${WHITE}curl http://\"$PROXY_FIP\":5000/${NC}"
+log "${BOLD}Test snmp: ${WHITE}snmpwalk -v2c -c public \"$PROXY_FIP\":6000 1.3.6.1.2.1.1.1.0${NC}"
 
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 MINUTES=$((ELAPSED / 60))
 SECONDS=$((ELAPSED % 60))
-log "Deployment completed in ${MINUTES}m ${SECONDS}s."
+log "${BOLD}${GREEN}Deployment completed in ${YELLOW}${MINUTES}m ${SECONDS}s${GREEN}.${NC}"
